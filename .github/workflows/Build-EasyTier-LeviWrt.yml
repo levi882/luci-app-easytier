@@ -1,0 +1,101 @@
+name: Build-EasyTier-LeviWrt
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: '发布版本号（留空则不发布）'
+        required: false
+        default: ''
+      text:
+        description: '发布说明'
+        required: false
+        default: ''
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  TAG: "${{ github.event.inputs.tag }}"
+  TZ: Asia/Shanghai
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build x86_64-iStoreOS
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Cache OpenWrt SDK
+        uses: actions/cache@v4
+        with:
+          path: |
+            /opt/openwrt-sdk-x86_64-24.10.4
+            dl
+          key: sdk-x86_64-24.10.4
+
+      - name: Overwrite i18n file
+        run: |
+          cat > luci-app-easytier/root/etc/uci-defaults/luci-i18n-easytier-zh-cn << 'EOF'
+          #!/bin/sh
+          exit 0
+          EOF
+
+      - name: Building packages
+        uses: openwrt/gh-action-sdk@main
+        env:
+          ARCH: x86_64-24.10.4
+          FEEDNAME: packages_ci
+          PACKAGES: easytier luci-app-easytier
+          NO_REFRESH_CHECK: 1
+          NO_SHFMT_CHECK: 1
+          MAKEFLAGS: -j$(nproc)
+          V: s
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: EasyTier-x86_64-24.10.4
+          path: bin/packages/x86_64/packages_ci/
+
+      - name: Create compress files
+        run: |
+          sudo timedatectl set-timezone "Asia/Shanghai"
+          echo "build_time=$(TZ=UTC-8 date '+%Y年%m月%d日%H:%M:%S' | jq -sRr @uri)" >> $GITHUB_ENV
+          zip -j EasyTier-${{ env.TAG }}-x86_64-24.10.4.zip bin/packages/x86_64/packages_ci/*
+
+      - name: Release
+        if: ${{ github.event.inputs.tag != '' }}
+        uses: softprops/action-gh-release@v2
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          body: |
+
+            > ### ![](https://img.shields.io/badge/编译时间-${{ env.build_time }}-blue?logo=github&labelColor=gray) ![](https://img.shields.io/github/downloads/${{ github.repository }}/${{ env.TAG }}/total?label=下载次数&logo=github)
+
+            - 本固件基于 **iStoreOS 24.10.4 (OpenWrt 24.10)** 构建，架构为 **x86_64**
+            - 内核版本：**6.6.110**
+            - 适配设备：**CncTion 1338NP-12 / Intel N4500**
+            - 包含组件：
+              - `easytier`
+              - `luci-app-easytier`
+            - 可直接使用命令安装：
+              ```bash
+              opkg install luci-app-easytier.ipk
+              ```
+              或新版 APK 系统：
+              ```bash
+              apk add --allow-untrusted luci-app-easytier.apk
+              ```
+
+            ${{ github.event.inputs.text }}
+
+          tag_name: ${{ env.TAG }}
+          files: EasyTier-${{ env.TAG }}-x86_64-24.10.4.zip
